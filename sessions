@@ -1,0 +1,480 @@
+#!/usr/bin/env python3
+"""sessions: browse and resume Claude Code sessions across all projects.
+
+Lists every session under ~/.claude/projects/, grouped by workspace project,
+with a readable description, and lets you jump back in via fzf. Solves the
+cwd-scoping problem of built-in `claude -r`.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from collections import defaultdict
+from pathlib import Path
+
+HOME = Path.home()
+PROJECTS_DIR = HOME / ".claude" / "projects"
+CACHE_DIR = HOME / ".cache" / "sessions"
+CACHE_FILE = CACHE_DIR / "index.json"
+CACHE_TTL = 300  # 5 min
+
+WORKSPACE_PREFIX = (
+    HOME
+    / "Library/CloudStorage/GoogleDrive-thomas@cfo-team.de/My Drive/Claude Workspace "
+)
+
+COMMAND_PREFIXES = ("<command-name>", "<local-command-stdout>", "<local-command-stderr>")
+SYSTEM_MARKER = "<system-reminder>"
+CLEAR_COMMAND = "/clear"
+
+
+def extract_message_text(msg):
+    c = msg.get("content", "") if isinstance(msg, dict) else ""
+    if isinstance(c, str):
+        return c
+    if isinstance(c, list):
+        return " ".join(
+            x.get("text", "")
+            for x in c
+            if isinstance(x, dict) and x.get("type") == "text"
+        )
+    return ""
+
+
+def is_noise_text(text):
+    if not text:
+        return True
+    stripped = text.lstrip()
+    if stripped.startswith(COMMAND_PREFIXES):
+        return True
+    if SYSTEM_MARKER in stripped[:200]:
+        return True
+    if stripped.rstrip() == CLEAR_COMMAND:
+        return True
+    return False
+
+
+def scan_session(path):
+    session_id = path.stem
+    cwd = None
+    git_branch = None
+    custom_title = None
+    first_prompt = None
+
+    try:
+        with path.open() as fh:
+            for line in fh:
+                try:
+                    r = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = r.get("type")
+                if t == "custom-title":
+                    # latest one wins (matches how `claude -n` / /name overrides)
+                    custom_title = r.get("customTitle") or custom_title
+                if not cwd and r.get("cwd"):
+                    cwd = r.get("cwd")
+                    git_branch = r.get("gitBranch") or git_branch
+                if t == "user" and not r.get("isMeta") and not first_prompt:
+                    txt = extract_message_text(r.get("message", {}))
+                    if not is_noise_text(txt):
+                        first_prompt = txt.strip()
+    except OSError:
+        return None
+
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+
+    return {
+        "session_id": session_id,
+        "cwd": cwd,
+        "git_branch": git_branch,
+        "custom_title": custom_title,
+        "first_prompt": first_prompt,
+        "mtime": stat.st_mtime,
+        "size": stat.st_size,
+        "path": str(path),
+    }
+
+
+def project_label(cwd):
+    if not cwd:
+        return "unknown"
+    prefix = str(WORKSPACE_PREFIX)
+    prefix_rstripped = prefix.rstrip()
+    cwd_rstripped = cwd.rstrip("/")
+    if cwd_rstripped == prefix_rstripped or cwd == prefix:
+        return "workspace-root"
+    if cwd.startswith(prefix):
+        rest = cwd[len(prefix):].strip("/")
+        parts = [p for p in rest.split("/") if p]
+        if not parts:
+            return "workspace-root"
+        return "/".join(parts[:2]) if len(parts) >= 2 else parts[0]
+    # outside workspace
+    return f"external/{Path(cwd).name}"
+
+
+def human_time_ago(mtime):
+    delta = time.time() - mtime
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta / 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta / 3600)}h ago"
+    if delta < 86400 * 7:
+        return f"{int(delta / 86400)}d ago"
+    if delta < 86400 * 30:
+        return f"{int(delta / 86400 / 7)}w ago"
+    return f"{int(delta / 86400 / 30)}mo ago"
+
+
+def build_index(force_refresh=False):
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not force_refresh and CACHE_FILE.exists():
+        try:
+            cache_mtime = CACHE_FILE.stat().st_mtime
+            if time.time() - cache_mtime < CACHE_TTL:
+                newest_jsonl = 0.0
+                for p in PROJECTS_DIR.glob("*/*.jsonl"):
+                    try:
+                        newest_jsonl = max(newest_jsonl, p.stat().st_mtime)
+                    except OSError:
+                        pass
+                if newest_jsonl < cache_mtime:
+                    return json.loads(CACHE_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    sessions = []
+    for p in PROJECTS_DIR.glob("*/*.jsonl"):
+        info = scan_session(p)
+        if info:
+            info["project"] = project_label(info.get("cwd"))
+            sessions.append(info)
+
+    try:
+        CACHE_FILE.write_text(json.dumps(sessions))
+    except OSError:
+        pass
+    return sessions
+
+
+def filter_sessions(sessions, args):
+    out = []
+    cutoff = None
+    if not args.all and args.days:
+        cutoff = time.time() - args.days * 86400
+
+    for s in sessions:
+        if not args.include_empty and not args.all:
+            # Empty = no real user prompt, even if session was named via `claude -n`.
+            # Matches plan definition: session must contain a real user message.
+            if not s.get("first_prompt"):
+                continue
+        if cutoff and s.get("mtime", 0) < cutoff:
+            continue
+        if args.project and args.project.lower() not in s.get("project", "").lower():
+            continue
+        out.append(s)
+    return out
+
+
+def apply_caps(sessions, args):
+    per_group_cap = args.per_group
+    if args.all or args.project:
+        per_group_cap = 0
+
+    sessions.sort(key=lambda s: s.get("mtime", 0), reverse=True)
+
+    groups = defaultdict(list)
+    for s in sessions:
+        groups[s.get("project", "unknown")].append(s)
+
+    displayed = []
+    overflow_by_group = {}
+    for project, items in groups.items():
+        if per_group_cap and len(items) > per_group_cap:
+            displayed.extend(items[:per_group_cap])
+            overflow_by_group[project] = len(items) - per_group_cap
+        else:
+            displayed.extend(items)
+
+    displayed.sort(key=lambda s: s.get("mtime", 0), reverse=True)
+
+    global_ceiling = None if args.all else 60
+    total_overflow = 0
+    if global_ceiling and len(displayed) > global_ceiling:
+        total_overflow = len(displayed) - global_ceiling
+        displayed = displayed[:global_ceiling]
+
+    return displayed, overflow_by_group, total_overflow
+
+
+def format_row(s, label_width=38, desc_width=70):
+    label = f"[{s['project']}]"
+    if len(label) > label_width:
+        label = label[: label_width - 1] + "]"
+    label = label.ljust(label_width)
+    time_ago = human_time_ago(s.get("mtime", 0)).rjust(8)
+    tag = "🏷 " if s.get("custom_title") else "  "
+    desc = s.get("custom_title") or s.get("first_prompt") or "(empty session)"
+    desc = re.sub(r"\s+", " ", desc).strip()
+    if len(desc) > desc_width:
+        desc = desc[: desc_width - 1] + "…"
+    return f"{label}  {time_ago}   {tag}{desc}"
+
+
+def render_rows(sessions, overflow_by_group, total_overflow, for_fzf=False):
+    lines = []
+    grouped = defaultdict(list)
+    for s in sessions:
+        grouped[s["project"]].append(s)
+
+    sorted_groups = sorted(
+        grouped.items(),
+        key=lambda kv: -max(s.get("mtime", 0) for s in kv[1]),
+    )
+
+    for project, items in sorted_groups:
+        for s in items:
+            row = format_row(s)
+            if for_fzf:
+                lines.append(f"{s['session_id']}\t{row}")
+            else:
+                lines.append(row)
+        if project in overflow_by_group:
+            footer = (
+                f"    … {overflow_by_group[project]} older session(s) in {project}"
+                f" — use --project {project} --all"
+            )
+            if for_fzf:
+                lines.append(f"__OVERFLOW__\t{footer}")
+            else:
+                lines.append(footer)
+
+    if total_overflow:
+        footer = f"    … {total_overflow} more session(s) truncated — use --all"
+        if for_fzf:
+            lines.append(f"__OVERFLOW__\t{footer}")
+        else:
+            lines.append(footer)
+
+    return lines
+
+
+def cmd_list(args):
+    sessions = build_index(force_refresh=args.refresh)
+    filtered = filter_sessions(sessions, args)
+    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args)
+    lines = render_rows(displayed, overflow_by_group, total_overflow, for_fzf=False)
+    if not lines:
+        print(
+            "(no sessions match filters — try --all, --days N, or --include-empty)",
+            file=sys.stderr,
+        )
+        return 0
+    for line in lines:
+        print(line)
+    return 0
+
+
+def cmd_picker(args):
+    sessions = build_index(force_refresh=args.refresh)
+    filtered = filter_sessions(sessions, args)
+    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args)
+    if not displayed:
+        print(
+            "(no sessions match filters — try --all, --days N, or --include-empty)",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        subprocess.run(
+            ["fzf", "--version"], capture_output=True, check=True
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("fzf not installed. Install with: brew install fzf", file=sys.stderr)
+        print("Showing plain list instead:", file=sys.stderr)
+        return cmd_list(args)
+
+    lines = render_rows(displayed, overflow_by_group, total_overflow, for_fzf=True)
+    preview_cmd = f"{sys.argv[0]} --preview {{1}}"
+
+    result = subprocess.run(
+        [
+            "fzf",
+            "--delimiter=\t",
+            "--with-nth=2..",
+            "--preview", preview_cmd,
+            "--preview-window=right:50%:wrap",
+            "--header=Select a Claude Code session to resume — Enter, or Esc to cancel",
+            "--no-sort",
+        ],
+        input="\n".join(lines),
+        text=True,
+        capture_output=True,
+    )
+
+    if result.returncode != 0:
+        return 0  # user pressed Esc, not an error
+    selected = result.stdout.strip()
+    if not selected:
+        return 0
+
+    session_id = selected.split("\t", 1)[0]
+    if session_id == "__OVERFLOW__":
+        print("That's a filter hint, not a session.", file=sys.stderr)
+        return 1
+
+    match = next(
+        (s for s in sessions if s["session_id"] == session_id), None
+    )
+    if not match or not match.get("cwd"):
+        print(f"Can't resume {session_id}: no cwd recorded", file=sys.stderr)
+        return 1
+
+    return resume_session(match["cwd"], session_id)
+
+
+def resume_session(cwd, session_id):
+    if not Path(cwd).exists():
+        print(f"cwd no longer exists: {cwd}", file=sys.stderr)
+        return 1
+    os.chdir(cwd)
+    print(f"→ cd {cwd}")
+    print(f"→ claude -r {session_id}")
+    os.execvp("claude", ["claude", "-r", session_id])
+
+
+def cmd_preview(session_id):
+    for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
+        print(f"Session: {session_id}")
+        info = scan_session(p)
+        if info:
+            print(f"Project: {info.get('project') or project_label(info.get('cwd'))}")
+            print(f"cwd:     {info.get('cwd') or '(unknown)'}")
+            print(f"Branch:  {info.get('git_branch') or '(none)'}")
+            print(f"Size:    {info.get('size', 0):,} bytes")
+            if info.get("custom_title"):
+                print(f"Title:   {info['custom_title']}")
+        print()
+        prompts = []
+        try:
+            with p.open() as fh:
+                for line in fh:
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if r.get("type") == "user" and not r.get("isMeta"):
+                        txt = extract_message_text(r.get("message", {}))
+                        if not is_noise_text(txt):
+                            prompts.append(txt.strip()[:400])
+                            if len(prompts) >= 8:
+                                break
+        except OSError:
+            pass
+        for i, pr in enumerate(prompts, 1):
+            print(f"─── prompt {i} " + "─" * 40)
+            print(pr)
+            print()
+        if not prompts:
+            print("(no user prompts found)")
+        return 0
+    print(f"Session {session_id} not found", file=sys.stderr)
+    return 1
+
+
+def cmd_name(session_id, title):
+    for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
+        record = {
+            "type": "custom-title",
+            "customTitle": title,
+            "sessionId": session_id,
+        }
+        with p.open("a") as fh:
+            fh.write(json.dumps(record) + "\n")
+        print(f"Set title for {session_id}: {title}")
+        if CACHE_FILE.exists():
+            try:
+                CACHE_FILE.unlink()
+            except OSError:
+                pass
+        return 0
+    print(f"Session {session_id} not found", file=sys.stderr)
+    return 1
+
+
+def cmd_resume(session_id):
+    for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
+        info = scan_session(p)
+        if info and info.get("cwd"):
+            return resume_session(info["cwd"], session_id)
+    print(f"Session {session_id} not found or has no recorded cwd", file=sys.stderr)
+    return 1
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Browse and resume Claude Code sessions across projects.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  sessions                        interactive fzf picker (default)
+  sessions --list                 plain grouped output
+  sessions --today                last 24h only
+  sessions --days 30              last 30 days
+  sessions --project my-cfo-hub   filter by project substring
+  sessions --all                  show everything (no filters)
+  sessions --name <uuid> "title"  retroactively name a session
+  sessions --resume <uuid>        resume session by UUID from any cwd
+""",
+    )
+    parser.add_argument("--list", action="store_true", help="Plain output (no fzf).")
+    parser.add_argument("--all", action="store_true", help="Disable all filters.")
+    parser.add_argument("--days", type=int, default=14,
+                        help="Recency window in days (default 14).")
+    parser.add_argument("--today", action="store_true", help="Shortcut for --days 1.")
+    parser.add_argument("--per-group", type=int, default=10,
+                        help="Max sessions per project (0=unlimited, default 10).")
+    parser.add_argument("--include-empty", action="store_true",
+                        help="Include aborted/empty sessions.")
+    parser.add_argument("--project", type=str, help="Filter by project substring.")
+    parser.add_argument("--refresh", action="store_true",
+                        help="Ignore cache, rescan all JSONLs.")
+    parser.add_argument("--name", nargs=2, metavar=("UUID", "TITLE"),
+                        help="Set a customTitle on an existing session.")
+    parser.add_argument("--resume", metavar="UUID", help="Resume a session by UUID.")
+    parser.add_argument("--preview", metavar="UUID", help=argparse.SUPPRESS)
+
+    args = parser.parse_args()
+
+    if args.today:
+        args.days = 1
+
+    if args.preview:
+        return cmd_preview(args.preview)
+    if args.name:
+        return cmd_name(args.name[0], args.name[1])
+    if args.resume:
+        return cmd_resume(args.resume)
+    if args.list:
+        return cmd_list(args)
+    return cmd_picker(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main() or 0)
+    except KeyboardInterrupt:
+        sys.exit(130)
