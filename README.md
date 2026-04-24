@@ -37,8 +37,8 @@ brew install fzf       # macOS
 # or your OS equivalent
 
 # 2. clone + install
-git clone https://github.com/tschenkster/claude-sessions.git
-cd claude-sessions
+git clone https://github.com/tschenkster/claude-code-session-lister.git
+cd claude-code-session-lister
 ./install.sh
 ```
 
