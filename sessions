@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -350,10 +351,32 @@ def resume_session(cwd, session_id):
     if not Path(cwd).exists():
         print(f"cwd no longer exists: {cwd}", file=sys.stderr)
         return 1
-    os.chdir(cwd)
-    print(f"→ cd {cwd}")
-    print(f"→ claude -r {session_id}")
-    os.execvp("claude", ["claude", "-r", session_id])
+
+    shell_cmd = f"cd {shlex.quote(cwd)} && claude -r {shlex.quote(session_id)}"
+    applescript_str = shell_cmd.replace("\\", "\\\\").replace('"', '\\"')
+    script = (
+        'tell application "iTerm"\n'
+        '    activate\n'
+        '    create window with default profile\n'
+        '    tell current session of current window\n'
+        f'        write text "{applescript_str}"\n'
+        '    end tell\n'
+        'end tell\n'
+    )
+
+    print(f"→ iTerm2: cd {cwd} && claude -r {session_id}")
+    try:
+        subprocess.run(["osascript", "-e", script], check=True)
+        return 0
+    except FileNotFoundError:
+        print("osascript not found — are you on macOS?", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as e:
+        print(
+            f"iTerm2 launch failed (osascript exit {e.returncode}). Is iTerm2 installed?",
+            file=sys.stderr,
+        )
+        return 1
 
 
 def cmd_preview(session_id):

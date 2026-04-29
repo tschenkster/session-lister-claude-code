@@ -25,7 +25,7 @@ This tool fixes that. One command, one picker, all sessions.
 - Title 🏷 shown when the session was explicitly named (via `claude -n` or retroactively).
 - Untitled sessions use the first 80 chars of the opening prompt.
 - `fzf` picker on top. Preview pane shows session metadata + first 8 user prompts.
-- Enter → `cd` into the right directory and `claude -r <uuid>`.
+- Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs `claude -r <uuid>`. The picker terminal is left untouched. (iTerm2 required — no Terminal.app fallback.)
 
 ## Install
 
@@ -37,8 +37,8 @@ brew install fzf       # macOS
 # or your OS equivalent
 
 # 2. clone + install
-git clone https://github.com/tschenkster/claude-code-session-lister.git
-cd claude-code-session-lister
+git clone https://github.com/tschenkster/session-lister-claude-code.git
+cd session-lister-claude-code
 ./install.sh
 ```
 
@@ -85,7 +85,7 @@ Pure Python 3 stdlib. No daemon, no background indexer.
   - File mtime (last active) and size
 - Derives a project label by stripping the workspace prefix from `cwd`.
 - Caches the index at `~/.cache/sessions/index.json` with a 5-minute TTL. Auto-invalidates when any JSONL is newer than the cache.
-- Resume = `cd` into the recorded `cwd` and `exec claude -r <uuid>`.
+- Resume = open a new iTerm2 window via `osascript` and run `cd <cwd> && claude -r <uuid>` in it.
 
 The tool is **read-only** with one exception: `--name <uuid> "<title>"` appends a `{"type":"custom-title", ...}` record to the session's JSONL — the same format Claude Code writes when you use `claude -n` or `/name`.
 

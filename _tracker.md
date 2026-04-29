@@ -1,6 +1,7 @@
-# claude-code-session-lister — Tracker
+# session-lister-claude-code — Tracker
 
 ## Done
+- [x] 2026-04-29: Rename project to session-lister-claude-code; resume in new iTerm2 window
 - [x] 2026-04-24: Initial release — `sessions` CLI + `/sessions` slash command, pushed to GitHub
 - [x] 2026-04-24: Add install.sh, MIT LICENSE, README with bloat-control docs
 
