@@ -11,8 +11,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -189,9 +191,10 @@ def filter_sessions(sessions, args):
     return out
 
 
-def apply_caps(sessions, args):
+def apply_caps(sessions, args, sort_mode="project"):
     per_group_cap = args.per_group
-    if args.all or args.project:
+    # Time view is a flat list — no per-project grouping, so no per-group cap.
+    if args.all or args.project or sort_mode == "time":
         per_group_cap = 0
 
     sessions.sort(key=lambda s: s.get("mtime", 0), reverse=True)
@@ -220,22 +223,50 @@ def apply_caps(sessions, args):
     return displayed, overflow_by_group, total_overflow
 
 
-def format_row(s, label_width=38, desc_width=70):
+def format_row(s, label_width=38, max_width=None):
     label = f"[{s['project']}]"
     if len(label) > label_width:
         label = label[: label_width - 1] + "]"
     label = label.ljust(label_width)
     time_ago = human_time_ago(s.get("mtime", 0)).rjust(8)
     tag = "🏷 " if s.get("custom_title") else "  "
-    desc = s.get("custom_title") or s.get("first_prompt") or "(empty session)"
+    desc = s.get("first_prompt") or s.get("custom_title") or "(empty session)"
+    desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
-    if len(desc) > desc_width:
-        desc = desc[: desc_width - 1] + "…"
-    return f"{label}  {time_ago}   {tag}{desc}"
+    row = f"{label}  {time_ago}   {tag}{desc}"
+    # When the caller knows the terminal width (cmd_list), trim so a row never
+    # wraps. fzf does its own per-pane truncation, so we leave rows full-length
+    # in the picker path and let fzf handle it (and resize handling).
+    if max_width is not None and len(row) > max_width:
+        row = row[: max_width - 1] + "…"
+    return row
 
 
-def render_rows(sessions, overflow_by_group, total_overflow, for_fzf=False):
+def render_rows(sessions, overflow_by_group, total_overflow,
+                for_fzf=False, max_width=None, sort_mode="project"):
     lines = []
+
+    if sort_mode == "time":
+        # Flat list, sorted by mtime. fzf default layout puts the FIRST input row
+        # at the bottom near the prompt, so for fzf we feed newest-first (DESC).
+        # For plain stdout, the user reads top-down, so we reverse to ASC so the
+        # newest line lands at the bottom of the output.
+        ordered = sorted(sessions, key=lambda s: s.get("mtime", 0), reverse=for_fzf)
+        for s in ordered:
+            row = format_row(s, max_width=max_width)
+            if for_fzf:
+                lines.append(f"{s['session_id']}\t{row}")
+            else:
+                lines.append(row)
+        if total_overflow:
+            if for_fzf:
+                footer = f"    … {total_overflow} more session(s) truncated — press Space to expand"
+                lines.append(f"__OVERFLOW_GLOBAL__\t{footer}")
+            else:
+                lines.append(f"    … {total_overflow} more session(s) truncated — use --all")
+        return lines
+
+    # project mode: clustered by project, groups ordered by recent activity
     grouped = defaultdict(list)
     for s in sessions:
         grouped[s["project"]].append(s)
@@ -247,27 +278,28 @@ def render_rows(sessions, overflow_by_group, total_overflow, for_fzf=False):
 
     for project, items in sorted_groups:
         for s in items:
-            row = format_row(s)
+            row = format_row(s, max_width=max_width)
             if for_fzf:
                 lines.append(f"{s['session_id']}\t{row}")
             else:
                 lines.append(row)
         if project in overflow_by_group:
-            footer = (
-                f"    … {overflow_by_group[project]} older session(s) in {project}"
-                f" — use --project {project} --all"
-            )
+            count = overflow_by_group[project]
             if for_fzf:
-                lines.append(f"__OVERFLOW__\t{footer}")
+                footer = f"    … {count} older session(s) in {project} — press Space to expand"
+                lines.append(f"__OVERFLOW_PROJECT__{project}\t{footer}")
             else:
-                lines.append(footer)
+                lines.append(
+                    f"    … {count} older session(s) in {project}"
+                    f" — use --project {project} --all"
+                )
 
     if total_overflow:
-        footer = f"    … {total_overflow} more session(s) truncated — use --all"
         if for_fzf:
-            lines.append(f"__OVERFLOW__\t{footer}")
+            footer = f"    … {total_overflow} more session(s) truncated — press Space to expand"
+            lines.append(f"__OVERFLOW_GLOBAL__\t{footer}")
         else:
-            lines.append(footer)
+            lines.append(f"    … {total_overflow} more session(s) truncated — use --all")
 
     return lines
 
@@ -275,8 +307,10 @@ def render_rows(sessions, overflow_by_group, total_overflow, for_fzf=False):
 def cmd_list(args):
     sessions = build_index(force_refresh=args.refresh)
     filtered = filter_sessions(sessions, args)
-    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args)
-    lines = render_rows(displayed, overflow_by_group, total_overflow, for_fzf=False)
+    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args, sort_mode=args.sort)
+    cols = shutil.get_terminal_size((100, 24)).columns
+    lines = render_rows(displayed, overflow_by_group, total_overflow,
+                        for_fzf=False, max_width=cols, sort_mode=args.sort)
     if not lines:
         print(
             "(no sessions match filters — try --all, --days N, or --include-empty)",
@@ -291,8 +325,15 @@ def cmd_list(args):
 def cmd_picker(args):
     sessions = build_index(force_refresh=args.refresh)
     filtered = filter_sessions(sessions, args)
-    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args)
-    if not displayed:
+
+    # Build both views once at launch so Ctrl-T toggling and Ctrl-R reset are
+    # instant disk reads — no need to re-scan or re-filter on every keypress.
+    time_disp, time_ovg, time_to = apply_caps(list(filtered), args, sort_mode="time")
+    proj_disp, proj_ovg, proj_to = apply_caps(list(filtered), args, sort_mode="project")
+    time_lines = render_rows(time_disp, time_ovg, time_to, for_fzf=True, sort_mode="time")
+    proj_lines = render_rows(proj_disp, proj_ovg, proj_to, for_fzf=True, sort_mode="project")
+
+    if not time_lines and not proj_lines:
         print(
             "(no sessions match filters — try --all, --days N, or --include-empty)",
             file=sys.stderr,
@@ -308,23 +349,65 @@ def cmd_picker(args):
         print("Showing plain list instead:", file=sys.stderr)
         return cmd_list(args)
 
-    lines = render_rows(displayed, overflow_by_group, total_overflow, for_fzf=True)
-    preview_cmd = f"{sys.argv[0]} --preview {{1}}"
+    initial_view = args.sort  # "time" or "project"
+    initial_lines = time_lines if initial_view == "time" else proj_lines
 
-    result = subprocess.run(
-        [
-            "fzf",
-            "--delimiter=\t",
-            "--with-nth=2..",
-            "--preview", preview_cmd,
-            "--preview-window=right:50%:wrap",
-            "--header=Select a Claude Code session to resume — Enter, or Esc to cancel",
-            "--no-sort",
-        ],
-        input="\n".join(lines),
-        text=True,
-        capture_output=True,
-    )
+    exec_quoted = shlex.quote(sys.argv[0])
+
+    # Three tempfiles: one tracks current view (so Ctrl-T can flip), the other
+    # two cache the rendered rows for each view.
+    state_fd, state_path = tempfile.mkstemp(prefix="sessions-state-", suffix=".txt")
+    time_fd, time_path = tempfile.mkstemp(prefix="sessions-time-", suffix=".txt")
+    proj_fd, proj_path = tempfile.mkstemp(prefix="sessions-proj-", suffix=".txt")
+    try:
+        with os.fdopen(state_fd, "w") as fh:
+            fh.write(initial_view + "\n")
+        with os.fdopen(time_fd, "w") as fh:
+            fh.write("\n".join(time_lines))
+        with os.fdopen(proj_fd, "w") as fh:
+            fh.write("\n".join(proj_lines))
+
+        state_q = shlex.quote(state_path)
+        time_q = shlex.quote(time_path)
+        proj_q = shlex.quote(proj_path)
+
+        preview_cmd = f"{exec_quoted} --preview {{1}}"
+        expand_cmd = f"{exec_quoted} --fzf-expand {{1}} --fzf-state {state_q}"
+        toggle_cmd = f"{exec_quoted} --fzf-toggle {state_q} {time_q} {proj_q}"
+        reset_cmd = f"{exec_quoted} --fzf-reset {state_q} {initial_view} {time_q} {proj_q}"
+
+        # fzf shell-escapes {1} (single-quoted), so do NOT add extra quotes around it.
+        space_bind = (
+            f'space:transform:case {{1}} in '
+            f'__OVERFLOW_*) echo "reload({expand_cmd})";; '
+            f'esac'
+        )
+        toggle_bind = f"ctrl-t:reload({toggle_cmd})"
+        reset_bind = f"ctrl-r:reload({reset_cmd})"
+
+        result = subprocess.run(
+            [
+                "fzf",
+                "--delimiter=\t",
+                "--with-nth=2..",
+                "--preview", preview_cmd,
+                "--preview-window=right:30%:wrap",
+                "--header=Enter resumes — Space expands — Ctrl-T toggles view — Ctrl-R resets — Esc cancels",
+                "--bind", space_bind,
+                "--bind", toggle_bind,
+                "--bind", reset_bind,
+                "--no-sort",
+            ],
+            input="\n".join(initial_lines),
+            text=True,
+            capture_output=True,
+        )
+    finally:
+        for p in (state_path, time_path, proj_path):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
 
     if result.returncode != 0:
         return 0  # user pressed Esc, not an error
@@ -333,8 +416,8 @@ def cmd_picker(args):
         return 0
 
     session_id = selected.split("\t", 1)[0]
-    if session_id == "__OVERFLOW__":
-        print("That's a filter hint, not a session.", file=sys.stderr)
+    if session_id.startswith("__OVERFLOW_"):
+        print("Press Space to expand this group.", file=sys.stderr)
         return 1
 
     match = next(
@@ -380,6 +463,9 @@ def resume_session(cwd, session_id):
 
 
 def cmd_preview(session_id):
+    if session_id.startswith("__OVERFLOW_"):
+        print("Hint: press Space to expand this group.")
+        return 0
     for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
         print(f"Session: {session_id}")
         info = scan_session(p)
@@ -438,6 +524,83 @@ def cmd_name(session_id, title):
     return 1
 
 
+def cmd_fzf_expand(token, state_path=None):
+    # Called by fzf's space-binding to replace the picker contents with
+    # an expanded view (project-filtered or unfiltered). Outputs fzf-formatted
+    # rows on stdout. Unknown tokens produce empty output (fzf treats this as
+    # an empty list, which we avoid by only binding space to overflow rows).
+    sessions = build_index()
+
+    class _Args:
+        all = False
+        days = None
+        per_group = 0
+        include_empty = False
+        project = None
+        refresh = False
+
+    args = _Args()
+    if token.startswith("__OVERFLOW_PROJECT__"):
+        args.project = token[len("__OVERFLOW_PROJECT__"):]
+        args.all = True
+    elif token == "__OVERFLOW_GLOBAL__":
+        args.all = True
+    else:
+        return 0
+
+    # Preserve the user's current sort mode when expanding.
+    sort_mode = "project"
+    if state_path:
+        try:
+            sort_mode = (Path(state_path).read_text().strip() or "project")
+        except OSError:
+            pass
+    if sort_mode not in ("time", "project"):
+        sort_mode = "project"
+
+    filtered = filter_sessions(sessions, args)
+    displayed, overflow_by_group, total_overflow = apply_caps(filtered, args, sort_mode=sort_mode)
+    lines = render_rows(displayed, overflow_by_group, total_overflow,
+                        for_fzf=True, sort_mode=sort_mode)
+    sys.stdout.write("\n".join(lines))
+    return 0
+
+
+def cmd_fzf_toggle(state_path, time_path, project_path):
+    # Flip the current view between "time" and "project" and emit the cached
+    # rows for the new view. Both caches are pre-rendered at picker launch.
+    try:
+        cur = Path(state_path).read_text().strip()
+    except OSError:
+        cur = "time"
+    new = "project" if cur == "time" else "time"
+    cache = project_path if new == "project" else time_path
+    try:
+        Path(state_path).write_text(new + "\n")
+    except OSError:
+        pass
+    try:
+        sys.stdout.write(Path(cache).read_text())
+    except OSError:
+        pass
+    return 0
+
+
+def cmd_fzf_reset(state_path, initial_view, time_path, project_path):
+    # Restore the launch-time view AND reset the toggle state so subsequent
+    # Ctrl-T presses behave correctly.
+    try:
+        Path(state_path).write_text(initial_view + "\n")
+    except OSError:
+        pass
+    cache = time_path if initial_view == "time" else project_path
+    try:
+        sys.stdout.write(Path(cache).read_text())
+    except OSError:
+        pass
+    return 0
+
+
 def cmd_resume(session_id):
     for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
         info = scan_session(p)
@@ -453,23 +616,30 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-  sessions                        interactive fzf picker (default)
-  sessions --list                 plain grouped output
+  sessions                        interactive fzf picker — time view (default)
+  sessions --sort project         picker grouped by project folder
+  sessions --list                 plain output (default time view)
+  sessions --list --sort project  plain output, grouped by project
   sessions --today                last 24h only
   sessions --days 30              last 30 days
   sessions --project my-cfo-hub   filter by project substring
   sessions --all                  show everything (no filters)
   sessions --name <uuid> "title"  retroactively name a session
   sessions --resume <uuid>        resume session by UUID from any cwd
+
+In the picker, Ctrl-T toggles between time and project views.
 """,
     )
     parser.add_argument("--list", action="store_true", help="Plain output (no fzf).")
+    parser.add_argument("--sort", choices=["time", "project"], default="time",
+                        help="View mode: 'time' (flat, newest at bottom; default) or "
+                             "'project' (clustered by project folder).")
     parser.add_argument("--all", action="store_true", help="Disable all filters.")
     parser.add_argument("--days", type=int, default=14,
                         help="Recency window in days (default 14).")
     parser.add_argument("--today", action="store_true", help="Shortcut for --days 1.")
     parser.add_argument("--per-group", type=int, default=10,
-                        help="Max sessions per project (0=unlimited, default 10).")
+                        help="Max sessions per project in project view (0=unlimited, default 10).")
     parser.add_argument("--include-empty", action="store_true",
                         help="Include aborted/empty sessions.")
     parser.add_argument("--project", type=str, help="Filter by project substring.")
@@ -479,6 +649,14 @@ Examples:
                         help="Set a customTitle on an existing session.")
     parser.add_argument("--resume", metavar="UUID", help="Resume a session by UUID.")
     parser.add_argument("--preview", metavar="UUID", help=argparse.SUPPRESS)
+    parser.add_argument("--fzf-expand", metavar="TOKEN", help=argparse.SUPPRESS)
+    parser.add_argument("--fzf-state", metavar="PATH", help=argparse.SUPPRESS)
+    parser.add_argument("--fzf-toggle", nargs=3,
+                        metavar=("STATE", "TIME_PATH", "PROJECT_PATH"),
+                        help=argparse.SUPPRESS)
+    parser.add_argument("--fzf-reset", nargs=4,
+                        metavar=("STATE", "INITIAL_VIEW", "TIME_PATH", "PROJECT_PATH"),
+                        help=argparse.SUPPRESS)
 
     args = parser.parse_args()
 
@@ -487,6 +665,12 @@ Examples:
 
     if args.preview:
         return cmd_preview(args.preview)
+    if args.fzf_expand:
+        return cmd_fzf_expand(args.fzf_expand, args.fzf_state)
+    if args.fzf_toggle:
+        return cmd_fzf_toggle(*args.fzf_toggle)
+    if args.fzf_reset:
+        return cmd_fzf_reset(*args.fzf_reset)
     if args.name:
         return cmd_name(args.name[0], args.name[1])
     if args.resume:
