@@ -1,6 +1,6 @@
 # sessions
 
-A terminal session browser for [Claude Code](https://docs.claude.com/claude-code). Lists every session across every project, grouped by folder, with readable descriptions, and lets you jump back into any of them with one keystroke.
+A terminal session browser for [Claude Code](https://docs.claude.com/claude-code). Lists every session across every project — flat by recency or grouped by folder, your pick — with readable descriptions, and lets you jump back into any of them with one keystroke.
 
 ## The problem it solves
 
@@ -13,19 +13,29 @@ This tool fixes that. One command, one picker, all sessions.
 ## What you get
 
 ```
-[coding-projects/my-app]         2h ago   🏷 fix-auth-redirect-loop
-[coding-projects/my-app]         5h ago      refactor the user model to split…
-[coding-projects/landing-page]   1d ago   🏷 wire-up-formspree-webhook
-[workspace-root]                 1d ago      draft blog post about async Python
 [side-projects/vacation-2026]    1w ago      build a packing list
-    … 14 older session(s) in workspace-root — use --project workspace-root --all
+[workspace-root]                 1d ago      draft blog post about async Python
+[coding-projects/landing-page]   1d ago   🏷 wire up the formspree webhook
+[coding-projects/my-app]         5h ago      refactor the user model to split…
+[coding-projects/my-app]         2h ago   🏷 fix the auth redirect loop
 ```
 
-- Grouped by project folder (derived from each session's recorded `cwd`).
-- Title 🏷 shown when the session was explicitly named (via `claude -n` or retroactively).
-- Untitled sessions use the first 80 chars of the opening prompt.
-- `fzf` picker on top. Preview pane shows session metadata + first 8 user prompts.
+- **Default: time view** — flat list sorted by last-active time, most recent at the bottom (next to the prompt, where the cursor starts).
+- **Project view (Ctrl-T)** — toggle to clusters by project folder, groups ordered by recent activity.
+- Description = first user prompt of the session. 🏷 marks sessions that also have an explicit custom title (visible in the preview pane).
+- Row width adapts to the terminal — the wider your window, the more text you see per session.
+- `fzf` picker, with preview pane showing session metadata + first 8 user prompts.
 - Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs `claude -r <uuid>`. The picker terminal is left untouched. (iTerm2 required — no Terminal.app fallback.)
+
+### Picker keys
+
+| Key | Action |
+|---|---|
+| Enter | Resume selected session in a new iTerm2 window |
+| Space | Expand a `… N older session(s) …` group inline |
+| Ctrl-T | Toggle between time view and project view |
+| Ctrl-R | Reset to the launch view |
+| Esc | Cancel |
 
 ## Install
 
@@ -49,8 +59,10 @@ Make sure `~/.local/bin` is on your `PATH`.
 ## Usage
 
 ```bash
-sessions                        # interactive fzf picker (default)
-sessions --list                 # plain grouped output
+sessions                        # interactive fzf picker, time view (default)
+sessions --sort project         # picker, project-grouped view
+sessions --list                 # plain output, time view (default)
+sessions --list --sort project  # plain output, grouped by project
 sessions --today                # last 24h only
 sessions --days 30              # last 30 days
 sessions --project my-app       # filter by project substring
