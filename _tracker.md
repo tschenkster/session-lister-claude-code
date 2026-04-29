@@ -1,7 +1,13 @@
 # session-lister-claude-code — Tracker
 
 ## Done
-- [x] 2026-04-29: Rename project to session-lister-claude-code; resume in new iTerm2 window
+- [x] 2026-04-29: Add time/project view toggle (Ctrl-T), default time view
+- [x] 2026-04-29: Adapt row widths to terminal size; let fzf truncate per pane
+- [x] 2026-04-29: Strip [Image #N] placeholders; prefer first prompt over stale custom_title
+- [x] 2026-04-29: Add Ctrl-R reset, Space-to-expand overflow groups
+- [x] 2026-04-29: Reduce preview pane to 30% so list gets more space
+- [x] 2026-04-29: Auto-rewrite cwd in JSONLs during folder rename; resume opens iTerm2
+- [x] 2026-04-29: Rename project to session-lister-claude-code
 - [x] 2026-04-24: Initial release — `sessions` CLI + `/sessions` slash command, pushed to GitHub
 - [x] 2026-04-24: Add install.sh, MIT LICENSE, README with bloat-control docs
 
