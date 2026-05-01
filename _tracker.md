@@ -1,6 +1,7 @@
 # session-lister-claude-code — Tracker
 
 ## Done
+- [x] 2026-05-01: Show context-window tokens in preview instead of bytes on disk
 - [x] 2026-05-01: Add projects view (one row per cwd, complete history); Ctrl-T cycles 3 views; projects becomes default; Enter opens fresh session
 - [x] 2026-04-29: Add time/project view toggle (Ctrl-T), default time view
 - [x] 2026-04-29: Adapt row widths to terminal size; let fzf truncate per pane
