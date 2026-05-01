@@ -1,6 +1,7 @@
 # session-lister-claude-code — Tracker
 
 ## Done
+- [x] 2026-05-01: Remove tag emoji from picker rows; strip leading "# Task" / "#tag" prefix from subject lines (render-only)
 - [x] 2026-05-01: Picker stays open after launching iTerm; Esc quits
 - [x] 2026-05-01: Show context-window tokens in preview instead of bytes on disk
 - [x] 2026-05-01: Add projects view (one row per cwd, complete history); Ctrl-T cycles 3 views; projects becomes default; Enter opens fresh session

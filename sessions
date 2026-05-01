@@ -223,17 +223,22 @@ def apply_caps(sessions, args, sort_mode="project"):
     return displayed, overflow_by_group, total_overflow
 
 
+def strip_leading_hashtag(s):
+    # Drop a leading "#tag" / "# Task" prefix; mid-text hashtags untouched.
+    return re.sub(r"^\s*#\s*\w+\s+", "", s)
+
+
 def format_row(s, label_width=38, max_width=None):
     label = f"[{s['project']}]"
     if len(label) > label_width:
         label = label[: label_width - 1] + "]"
     label = label.ljust(label_width)
     time_ago = human_time_ago(s.get("mtime", 0)).rjust(8)
-    tag = "🏷 " if s.get("custom_title") else "  "
     desc = s.get("first_prompt") or s.get("custom_title") or "(empty session)"
     desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
-    row = f"{label}  {time_ago}   {tag}{desc}"
+    desc = strip_leading_hashtag(desc)
+    row = f"{label}  {time_ago}   {desc}"
     # When the caller knows the terminal width (cmd_list), trim so a row never
     # wraps. fzf does its own per-pane truncation, so we leave rows full-length
     # in the picker path and let fzf handle it (and resize handling).
@@ -342,6 +347,7 @@ def format_project_row(p, label_width=38, max_width=None):
     desc = p.get("latest_title") or p.get("cwd") or ""
     desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
+    desc = strip_leading_hashtag(desc)
     row = f"{label}  {time_ago}   {count}  {desc}"
     if max_width is not None and len(row) > max_width:
         row = row[: max_width - 1] + "…"
@@ -623,7 +629,7 @@ def cmd_preview(session_id):
             else:
                 print("Tokens:  (none yet)")
             if info.get("custom_title"):
-                print(f"Title:   {info['custom_title']}")
+                print(f"Title:   {strip_leading_hashtag(info['custom_title'])}")
         print()
         for i, pr in enumerate(prompts, 1):
             print(f"─── prompt {i} " + "─" * 40)
