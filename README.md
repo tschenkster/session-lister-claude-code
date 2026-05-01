@@ -12,28 +12,40 @@ This tool fixes that. One command, one picker, all sessions.
 
 ## What you get
 
+Three views, one picker:
+
 ```
-[side-projects/vacation-2026]    1w ago      build a packing list
+# projects view (default) — one row per cwd you've ever opened Claude in
+[side-projects/vacation-2026]    1w ago     3 sess  build a packing list
+[coding-projects/landing-page]   1d ago     7 sess  wire up the formspree webhook
+[coding-projects/my-app]         2h ago    24 sess  fix the auth redirect loop
+
+# time view (Ctrl-T) — flat list of individual sessions by recency
 [workspace-root]                 1d ago      draft blog post about async Python
-[coding-projects/landing-page]   1d ago   🏷 wire up the formspree webhook
 [coding-projects/my-app]         5h ago      refactor the user model to split…
 [coding-projects/my-app]         2h ago   🏷 fix the auth redirect loop
+
+# project view (Ctrl-T again) — sessions clustered by project folder
+[coding-projects/my-app]         5h ago      refactor the user model to split…
+[coding-projects/my-app]         2h ago   🏷 fix the auth redirect loop
+[side-projects/vacation-2026]    1w ago      build a packing list
 ```
 
-- **Default: time view** — flat list sorted by last-active time, most recent at the bottom (next to the prompt, where the cursor starts).
-- **Project view (Ctrl-T)** — toggle to clusters by project folder, groups ordered by recent activity.
-- Description = first user prompt of the session. 🏷 marks sessions that also have an explicit custom title (visible in the preview pane).
-- Row width adapts to the terminal — the wider your window, the more text you see per session.
+- **Projects view (default)** — one row per unique cwd, complete history (no recency filter). Enter starts a **fresh** Claude Code session in that directory.
+- **Time view (Ctrl-T)** — flat list of individual sessions sorted by last-active time, most recent at the bottom. Enter resumes the chosen session.
+- **Project view (Ctrl-T again)** — sessions clustered by project folder, groups ordered by recent activity. Enter resumes the chosen session.
+- Description for sessions = first user prompt. 🏷 marks sessions that also have an explicit custom title (visible in the preview pane).
+- Row width adapts to the terminal — the wider your window, the more text you see per row.
 - `fzf` picker, with preview pane showing session metadata + first 8 user prompts.
-- Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs `claude -r <uuid>`. The picker terminal is left untouched. (iTerm2 required — no Terminal.app fallback.)
+- Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs either `claude -r <uuid>` (session views) or `claude` (projects view). The picker terminal is left untouched. (iTerm2 required — no Terminal.app fallback.)
 
 ### Picker keys
 
 | Key | Action |
 |---|---|
-| Enter | Resume selected session in a new iTerm2 window |
-| Space | Expand a `… N older session(s) …` group inline |
-| Ctrl-T | Toggle between time view and project view |
+| Enter | Resume selected session, OR (in projects view) open a new session in that cwd |
+| Space | Expand a `… N older session(s) …` group inline (session views only) |
+| Ctrl-T | Cycle through projects → time → project views |
 | Ctrl-R | Reset to the launch view |
 | Esc | Cancel |
 
@@ -59,14 +71,16 @@ Make sure `~/.local/bin` is on your `PATH`.
 ## Usage
 
 ```bash
-sessions                        # interactive fzf picker, time view (default)
-sessions --sort project         # picker, project-grouped view
-sessions --list                 # plain output, time view (default)
-sessions --list --sort project  # plain output, grouped by project
-sessions --today                # last 24h only
-sessions --days 30              # last 30 days
-sessions --project my-app       # filter by project substring
-sessions --all                  # show everything, no filters
+sessions                        # interactive fzf picker, projects view (default)
+sessions --sort time            # picker, flat sessions by recency
+sessions --sort project         # picker, sessions grouped by project folder
+sessions --list                 # plain output, projects view (default)
+sessions --list --sort time     # plain output, flat sessions by recency
+sessions --list --sort project  # plain output, sessions grouped by project
+sessions --today                # last 24h only (session views)
+sessions --days 30              # last 30 days (session views)
+sessions --project my-app       # filter by project substring (session views)
+sessions --all                  # show everything, no filters (session views)
 sessions --name <uuid> "title"  # retroactively name a session
 sessions --resume <uuid>        # jump straight to a known UUID from anywhere
 ```
@@ -75,7 +89,7 @@ Inside an existing Claude Code session, the `/sessions` slash command prints the
 
 ## Bloat control
 
-The default view is deliberately narrow. Filters apply in this order:
+These filters apply to the **session views** (`--sort time`, `--sort project`). The projects view bypasses all of them on purpose — it's the complete history of every cwd you've ever opened. Filters apply in this order:
 
 1. **Empty sessions are hidden.** A session with no real user message (just `/clear` or aborted startup) is treated as noise. `--include-empty` overrides.
 2. **14-day recency window.** Older sessions are almost always "already finished or forgotten." `--days N` or `--all` overrides.
@@ -97,7 +111,7 @@ Pure Python 3 stdlib. No daemon, no background indexer.
   - File mtime (last active) and size
 - Derives a project label by stripping the workspace prefix from `cwd`.
 - Caches the index at `~/.cache/sessions/index.json` with a 5-minute TTL. Auto-invalidates when any JSONL is newer than the cache.
-- Resume = open a new iTerm2 window via `osascript` and run `cd <cwd> && claude -r <uuid>` in it.
+- Resume = open a new iTerm2 window via `osascript` and run `cd <cwd> && claude -r <uuid>` in it. From the projects view, the same path runs `cd <cwd> && claude` to start a fresh session in that directory.
 
 The tool is **read-only** with one exception: `--name <uuid> "<title>"` appends a `{"type":"custom-title", ...}` record to the session's JSONL — the same format Claude Code writes when you use `claude -n` or `/name`.
 
