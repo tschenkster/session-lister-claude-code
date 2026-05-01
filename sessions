@@ -139,6 +139,12 @@ def human_time_ago(mtime):
     return f"{int(delta / 86400 / 30)}mo ago"
 
 
+def absolute_date(mtime):
+    if not mtime:
+        return "        "
+    return time.strftime("[%d.%m.]", time.localtime(mtime))
+
+
 def build_index(force_refresh=False):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -214,7 +220,7 @@ def apply_caps(sessions, args, sort_mode="project"):
 
     displayed.sort(key=lambda s: s.get("mtime", 0), reverse=True)
 
-    global_ceiling = None if args.all else 60
+    global_ceiling = None if args.all else 300
     total_overflow = 0
     if global_ceiling and len(displayed) > global_ceiling:
         total_overflow = len(displayed) - global_ceiling
@@ -234,11 +240,12 @@ def format_row(s, label_width=38, max_width=None):
         label = label[: label_width - 1] + "]"
     label = label.ljust(label_width)
     time_ago = human_time_ago(s.get("mtime", 0)).rjust(8)
+    date_str = absolute_date(s.get("mtime", 0))
     desc = s.get("first_prompt") or s.get("custom_title") or "(empty session)"
     desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
     desc = strip_leading_hashtag(desc)
-    row = f"{label}  {time_ago}   {desc}"
+    row = f"{label}  {time_ago}  {date_str}   {desc}"
     # When the caller knows the terminal width (cmd_list), trim so a row never
     # wraps. fzf does its own per-pane truncation, so we leave rows full-length
     # in the picker path and let fzf handle it (and resize handling).
@@ -343,12 +350,13 @@ def format_project_row(p, label_width=38, max_width=None):
         label = label[: label_width - 1] + "]"
     label = label.ljust(label_width)
     time_ago = human_time_ago(p.get("last_mtime", 0)).rjust(8)
+    date_str = absolute_date(p.get("last_mtime", 0))
     count = f"{p['session_count']:>3} sess"
     desc = p.get("latest_title") or p.get("cwd") or ""
     desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
     desc = strip_leading_hashtag(desc)
-    row = f"{label}  {time_ago}   {count}  {desc}"
+    row = f"{label}  {time_ago}  {date_str}   {count}  {desc}"
     if max_width is not None and len(row) > max_width:
         row = row[: max_width - 1] + "…"
     return row
@@ -792,8 +800,8 @@ Enter on a project row opens a fresh Claude Code session in that cwd.
                              "'time' (flat sessions, newest at bottom), or "
                              "'project' (sessions clustered by project folder).")
     parser.add_argument("--all", action="store_true", help="Disable all filters.")
-    parser.add_argument("--days", type=int, default=14,
-                        help="Recency window in days (default 14).")
+    parser.add_argument("--days", type=int, default=56,
+                        help="Recency window in days (default 56, ~8 weeks).")
     parser.add_argument("--today", action="store_true", help="Shortcut for --days 1.")
     parser.add_argument("--per-group", type=int, default=10,
                         help="Max sessions per project in project view (0=unlimited, default 10).")

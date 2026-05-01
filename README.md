@@ -101,13 +101,13 @@ Inside an existing Claude Code session, the `/sessions` slash command prints the
 These filters apply to the **session views** (`--sort time`, `--sort project`). The projects view bypasses all of them on purpose — it's the complete history of every cwd you've ever opened. Filters apply in this order:
 
 1. **Empty sessions are hidden.** A session with no real user message (just `/clear` or aborted startup) is treated as noise. `--include-empty` overrides.
-2. **14-day recency window.** Older sessions are almost always "already finished or forgotten." `--days N` or `--all` overrides.
+2. **56-day recency window (~8 weeks).** Older sessions are almost always "already finished or forgotten." `--days N` or `--all` overrides.
 3. **Per-project cap: 10 most-recent per group.** Stops a chatty project from drowning the list. A footer reveals how many were hidden and how to see them: `--project <slug>` disables the cap for that one group.
-4. **Global ceiling: 60 rows.** If filters still return more, truncate with a footer. `--all` disables.
+4. **Global ceiling: 300 rows.** If filters still return more, truncate with a footer. `--all` disables.
 
 `fzf`'s fuzzy search gives you back anything you can name — type "auth" or "olli" to find a session regardless of age, as long as it survived the filters above. For older matches, use `--days 90` or `--all`.
 
-Typical default view: 30–50 sessions. One comfortable fzf screen.
+Typical default view: ~150–200 sessions across 8 weeks. fzf scrolls.
 
 ## How it works
 
