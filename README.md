@@ -37,7 +37,7 @@ Three views, one picker:
 - Description for sessions = first user prompt. 🏷 marks sessions that also have an explicit custom title (visible in the preview pane).
 - Row width adapts to the terminal — the wider your window, the more text you see per row.
 - `fzf` picker, with preview pane showing session metadata + first 8 user prompts.
-- Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs either `claude -r <uuid>` (session views) or `claude` (projects view). The picker terminal is left untouched. (iTerm2 required — no Terminal.app fallback.)
+- Enter → opens a new **iTerm2** window, `cd`s into the recorded directory, and runs either `claude -r <uuid>` (session views) or `claude` (projects view). The picker stays running in the original terminal so you can launch another session immediately — press Esc to quit. (iTerm2 required — no Terminal.app fallback.)
 
 ### Picker keys
 
@@ -47,7 +47,7 @@ Three views, one picker:
 | Space | Expand a `… N older session(s) …` group inline (session views only) |
 | Ctrl-T | Cycle through projects → time → project views |
 | Ctrl-R | Reset to the launch view |
-| Esc | Cancel |
+| Esc | Quit the picker (after a launch the picker stays up — Esc is the way out) |
 
 ## Install
 
