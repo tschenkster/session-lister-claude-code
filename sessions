@@ -576,17 +576,8 @@ def cmd_preview(session_id):
         print("Hint: press Space to expand this group.")
         return 0
     for p in PROJECTS_DIR.glob(f"*/{session_id}.jsonl"):
-        print(f"Session: {session_id}")
-        info = scan_session(p)
-        if info:
-            print(f"Project: {info.get('project') or project_label(info.get('cwd'))}")
-            print(f"cwd:     {info.get('cwd') or '(unknown)'}")
-            print(f"Branch:  {info.get('git_branch') or '(none)'}")
-            print(f"Size:    {info.get('size', 0):,} bytes")
-            if info.get("custom_title"):
-                print(f"Title:   {info['custom_title']}")
-        print()
         prompts = []
+        last_usage = None
         try:
             with p.open() as fh:
                 for line in fh:
@@ -594,14 +585,39 @@ def cmd_preview(session_id):
                         r = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    if r.get("type") == "user" and not r.get("isMeta"):
-                        txt = extract_message_text(r.get("message", {}))
-                        if not is_noise_text(txt):
-                            prompts.append(txt.strip()[:400])
-                            if len(prompts) >= 8:
-                                break
+                    if r.get("type") == "assistant":
+                        u = (r.get("message") or {}).get("usage")
+                        if isinstance(u, dict):
+                            last_usage = u
+                    elif r.get("type") == "user" and not r.get("isMeta"):
+                        if len(prompts) < 8:
+                            txt = extract_message_text(r.get("message", {}))
+                            if not is_noise_text(txt):
+                                prompts.append(txt.strip()[:400])
         except OSError:
             pass
+
+        context_tokens = 0
+        if last_usage:
+            context_tokens = (
+                (last_usage.get("input_tokens") or 0)
+                + (last_usage.get("cache_creation_input_tokens") or 0)
+                + (last_usage.get("cache_read_input_tokens") or 0)
+            )
+
+        print(f"Session: {session_id}")
+        info = scan_session(p)
+        if info:
+            print(f"Project: {info.get('project') or project_label(info.get('cwd'))}")
+            print(f"cwd:     {info.get('cwd') or '(unknown)'}")
+            print(f"Branch:  {info.get('git_branch') or '(none)'}")
+            if last_usage:
+                print(f"Tokens:  {context_tokens:,}")
+            else:
+                print("Tokens:  (none yet)")
+            if info.get("custom_title"):
+                print(f"Title:   {info['custom_title']}")
+        print()
         for i, pr in enumerate(prompts, 1):
             print(f"─── prompt {i} " + "─" * 40)
             print(pr)
