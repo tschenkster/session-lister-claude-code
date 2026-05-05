@@ -56,6 +56,7 @@ Three views, one picker:
 | Space | Expand a `… N older session(s) …` group inline (session views only) |
 | Ctrl-T | Cycle through projects → time → project views |
 | Ctrl-R | Reset to the launch view |
+| Ctrl-G | Refresh the index (rescans `~/.claude/projects/`, picks up new sessions) |
 | Esc | Quit the picker (after a launch the picker stays up — Esc is the way out) |
 
 ## Install

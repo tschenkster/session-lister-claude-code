@@ -1,6 +1,7 @@
 # session-lister-claude-code — Tracker
 
 ## Done
+- [x] 2026-05-05: Add Ctrl-G in-picker refresh (rescan + reload without Esc)
 - [x] 2026-05-01: Widen retention window (--days 14→56, global ceiling 60→300)
 - [x] 2026-05-01: Add bracketed [DD.MM.] absolute-date column to all picker/list views
 - [x] 2026-05-01: Remove tag emoji from picker rows; strip leading "# Task" / "#tag" prefix from subject lines (render-only)

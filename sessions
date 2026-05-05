@@ -499,10 +499,11 @@ def cmd_picker(args):
                     "--with-nth=2..",
                     "--preview", preview_cmd,
                     "--preview-window=right:30%:wrap",
-                    "--header=Enter resumes/opens — Space expands — Ctrl-T cycles view — Ctrl-R resets — Esc quits",
+                    "--header=Enter resumes/opens — Space expands — Ctrl-T cycles view — Ctrl-R resets — Ctrl-G refreshes — Esc quits",
                     "--bind", space_bind,
                     "--bind", toggle_bind,
                     "--bind", reset_bind,
+                    "--expect=ctrl-g",
                     "--no-sort",
                 ],
                 input="\n".join(initial_lines),
@@ -518,7 +519,18 @@ def cmd_picker(args):
 
         if result.returncode != 0:
             return 0  # user pressed Esc — quit the app
-        selected = result.stdout.strip()
+
+        # With --expect, fzf always emits the trigger key on line 1 (empty for
+        # plain Enter) and the selected row on line 2.
+        out_lines = result.stdout.split("\n")
+        trigger = out_lines[0] if out_lines else ""
+        selected = out_lines[1].strip() if len(out_lines) > 1 else ""
+
+        if trigger == "ctrl-g":
+            # Re-loop and rebuild: force_refresh is already True after the
+            # first pass, so build_index will rescan all JSONLs.
+            continue
+
         if not selected:
             return 0
 
