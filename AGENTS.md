@@ -28,3 +28,12 @@ No formal test suite. Smoke checks on a machine with a populated `~/.claude/proj
 - `sessions --project <slug>` bypasses the per-group cap.
 - `sessions --name <uuid> "<title>"` is readable back via `sessions --list --project <slug>`.
 - Cache: cold run ~0.4s, warm run ~0.04s.
+
+
+## Claude Memory Sync
+
+Claude Code's hidden internal memory (`~/.claude/projects/`) is automatically synced to the `35-knowledge/claude-memory/` directory at the root of the main Claude Workspace.
+
+**ATTENTION ALL AI AGENTS:**
+- **Google Antigravity, OpenAI Codex, & Other Agents**: You MUST read `/Users/thomas/Library/CloudStorage/GoogleDrive-thomas@cfo-team.de/My Drive/Claude Workspace /35-knowledge/claude-memory/workspace_MEMORY.md` when starting tasks to gather context on established rules.
+- **Claude Code**: You MUST COMPLETELY IGNORE the `35-knowledge/claude-memory/` directory. It is a mirror of your own internal memory. Rely exclusively on your native `~/.claude/projects/` memory to prevent infinite loops and memory bloat.
