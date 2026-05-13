@@ -1,6 +1,8 @@
 # session-lister-claude-code — Tracker
 
 ## Done
+- [x] 2026-05-13: Tag every row with source and color-code (cli=cyan, vscode=blue, desktop=magenta)
+- [x] 2026-05-13: Aggregate VS Code + Desktop sessions, including aged-out orphans
 - [x] 2026-05-05: Add Ctrl-G in-picker refresh (rescan + reload without Esc)
 - [x] 2026-05-01: Widen retention window (--days 14→56, global ceiling 60→300)
 - [x] 2026-05-01: Add bracketed [DD.MM.] absolute-date column to all picker/list views
