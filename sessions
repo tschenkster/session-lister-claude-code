@@ -46,6 +46,17 @@ COMMAND_PREFIXES = ("<command-name>", "<local-command-stdout>", "<local-command-
 SYSTEM_MARKER = "<system-reminder>"
 CLEAR_COMMAND = "/clear"
 
+# ANSI color codes for the per-source bracket prefix. Picked for distinctness on a
+# dark terminal background: cli=cyan (neutral), vscode=blue (VS Code brand),
+# desktop=magenta. fzf needs --ansi to render these; cmd_list emits them only
+# when stdout is a TTY.
+SOURCE_COLORS = {
+    "cli": "\033[36m",      # cyan
+    "vscode": "\033[34m",   # blue
+    "desktop": "\033[35m",  # magenta
+}
+ANSI_RESET = "\033[0m"
+
 
 def extract_message_text(msg):
     c = msg.get("content", "") if isinstance(msg, dict) else ""
@@ -328,32 +339,39 @@ def strip_leading_hashtag(s):
     return re.sub(r"^\s*#\s*\w+\s+", "", s)
 
 
-def format_row(s, label_width=38, max_width=None):
-    src = s.get("source")
-    if src in ("vscode", "desktop"):
-        label = f"[{s['project']} | {src}]"
-    else:
-        label = f"[{s['project']}]"
-    if len(label) > label_width:
-        label = label[: label_width - 1] + "]"
-    label = label.ljust(label_width)
+def format_row(s, label_width=48, max_width=None, color=False):
+    src = s.get("source") or "cli"
+    suffix = f" | {src}"
+    # Reserve room so the source tag never gets truncated. If the project portion
+    # doesn't fit, ellipsize the project — not the tag (color and tag are how the
+    # user picks out source at a glance).
+    budget = label_width - 2 - len(suffix)  # 2 chars for '[' and ']'
+    proj = s["project"]
+    if len(proj) > budget:
+        proj = proj[: budget - 1] + "…"
+    label = f"[{proj}{suffix}]"  # un-padded, un-colored — fixed visible length
+    plain_label = label.ljust(label_width)
     time_ago = human_time_ago(s.get("mtime", 0)).rjust(8)
     date_str = absolute_date(s.get("mtime", 0))
     desc = s.get("first_prompt") or s.get("custom_title") or "(empty session)"
     desc = re.sub(r"\[Image #\d+\]", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
     desc = strip_leading_hashtag(desc)
-    row = f"{label}  {time_ago}  {date_str}   {desc}"
+    row = f"{plain_label}  {time_ago}  {date_str}   {desc}"
     # When the caller knows the terminal width (cmd_list), trim so a row never
     # wraps. fzf does its own per-pane truncation, so we leave rows full-length
     # in the picker path and let fzf handle it (and resize handling).
     if max_width is not None and len(row) > max_width:
         row = row[: max_width - 1] + "…"
+    # Colorize last so width math is on the plain row. Label is at position 0 and
+    # truncation only eats from the right, so the bracketed portion is intact here.
+    if color and src in SOURCE_COLORS:
+        row = f"{SOURCE_COLORS[src]}{label}{ANSI_RESET}" + row[len(label):]
     return row
 
 
 def render_rows(sessions, overflow_by_group, total_overflow,
-                for_fzf=False, max_width=None, sort_mode="project"):
+                for_fzf=False, max_width=None, sort_mode="project", color=False):
     lines = []
 
     if sort_mode == "time":
@@ -363,7 +381,7 @@ def render_rows(sessions, overflow_by_group, total_overflow,
         # newest line lands at the bottom of the output.
         ordered = sorted(sessions, key=lambda s: s.get("mtime", 0), reverse=for_fzf)
         for s in ordered:
-            row = format_row(s, max_width=max_width)
+            row = format_row(s, max_width=max_width, color=color)
             if for_fzf:
                 lines.append(f"{s['session_id']}\t{row}")
             else:
@@ -388,7 +406,7 @@ def render_rows(sessions, overflow_by_group, total_overflow,
 
     for project, items in sorted_groups:
         for s in items:
-            row = format_row(s, max_width=max_width)
+            row = format_row(s, max_width=max_width, color=color)
             if for_fzf:
                 lines.append(f"{s['session_id']}\t{row}")
             else:
@@ -479,8 +497,11 @@ def cmd_list(args):
     filtered = filter_sessions(sessions, args)
     displayed, overflow_by_group, total_overflow = apply_caps(filtered, args, sort_mode=args.sort)
     cols = shutil.get_terminal_size((100, 24)).columns
+    # Only color when stdout is a TTY (don't pollute pipes / files with escape codes).
+    use_color = sys.stdout.isatty()
     lines = render_rows(displayed, overflow_by_group, total_overflow,
-                        for_fzf=False, max_width=cols, sort_mode=args.sort)
+                        for_fzf=False, max_width=cols, sort_mode=args.sort,
+                        color=use_color)
     if not lines:
         print(
             "(no sessions match filters — try --all, --days N, or --include-empty)",
@@ -536,8 +557,8 @@ def cmd_picker(args):
         # history of every cwd, intentionally bypassing --days / --include-empty.
         time_disp, time_ovg, time_to = apply_caps(list(filtered), args, sort_mode="time")
         proj_disp, proj_ovg, proj_to = apply_caps(list(filtered), args, sort_mode="project")
-        time_lines = render_rows(time_disp, time_ovg, time_to, for_fzf=True, sort_mode="time")
-        proj_lines = render_rows(proj_disp, proj_ovg, proj_to, for_fzf=True, sort_mode="project")
+        time_lines = render_rows(time_disp, time_ovg, time_to, for_fzf=True, sort_mode="time", color=True)
+        proj_lines = render_rows(proj_disp, proj_ovg, proj_to, for_fzf=True, sort_mode="project", color=True)
 
         projects = build_projects(sessions)
         projects_lines = render_project_rows(projects, for_fzf=True)
@@ -593,6 +614,7 @@ def cmd_picker(args):
             result = subprocess.run(
                 [
                     "fzf",
+                    "--ansi",
                     "--delimiter=\t",
                     "--with-nth=2..",
                     "--preview", preview_cmd,
@@ -858,7 +880,7 @@ def cmd_fzf_expand(token, state_path=None):
     filtered = filter_sessions(sessions, args)
     displayed, overflow_by_group, total_overflow = apply_caps(filtered, args, sort_mode=sort_mode)
     lines = render_rows(displayed, overflow_by_group, total_overflow,
-                        for_fzf=True, sort_mode=sort_mode)
+                        for_fzf=True, sort_mode=sort_mode, color=True)
     sys.stdout.write("\n".join(lines))
     return 0
 

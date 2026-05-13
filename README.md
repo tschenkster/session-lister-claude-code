@@ -5,7 +5,7 @@ A terminal session browser for [Claude Code](https://docs.claude.com/claude-code
 ## Highlights
 
 - **Every session in one picker.** Not scoped to the current folder like `claude -r`.
-- **All three local surfaces.** iTerm/Terminal CLI sessions, VS Code-extension sessions, and Claude-Desktop-app sessions — including 90-day-aged-out orphans whose transcript has been pruned but whose metadata survives. (Cloud-only claude.ai sessions are not local, so not listed.) Filter with `--source {cli,vscode,desktop,all}`.
+- **All three local surfaces.** iTerm/Terminal CLI sessions (cyan), VS Code-extension sessions (blue), and Claude-Desktop-app sessions (magenta) — every row is tagged and color-coded so you can scan by source. Includes 90-day-aged-out orphans whose transcript has been pruned but whose metadata survives. (Cloud-only claude.ai sessions are not local, so not listed.) Filter with `--source {cli,vscode,desktop,all}`.
 - **Pick the view that fits your head.** Three layouts — by project (default), flat by recency, or sessions grouped by project — toggled with Ctrl-T.
 - **Type to filter, Enter to resume.** `fzf` fuzzy search; resume opens a fresh iTerm2 window so the picker stays up for the next jump.
 - **Fast.** Pure local file scan. Cold ~0.5s, warm ~0.05s. No network, no daemon, no background indexer.
@@ -31,19 +31,19 @@ Three views, one picker:
 [coding-projects/my-app]         2h ago    24 sess  fix the auth redirect loop
 
 # time view (Ctrl-T) — flat list of individual sessions by recency
-[workspace-root]                 1d ago      draft blog post about async Python
-[coding-projects/my-app]         5h ago      refactor the user model to split…
-[coding-projects/my-app | vscode] 3h ago     wire up the new component
-[coding-projects/my-app]         2h ago   🏷 fix the auth redirect loop
+[workspace-root | cli]                 1d ago      draft blog post about async Python
+[coding-projects/my-app | cli]         5h ago      refactor the user model to split…
+[coding-projects/my-app | vscode]      3h ago      wire up the new component
+[coding-projects/my-app | cli]         2h ago   🏷 fix the auth redirect loop
 
 # project view (Ctrl-T again) — sessions clustered by project folder
-[coding-projects/my-app]         5h ago      refactor the user model to split…
-[coding-projects/my-app | vscode] 3h ago     wire up the new component
-[coding-projects/my-app]         2h ago   🏷 fix the auth redirect loop
-[side-projects/vacation-2026 | desktop] 1w ago  build a packing list
+[coding-projects/my-app | cli]         5h ago      refactor the user model to split…
+[coding-projects/my-app | vscode]      3h ago      wire up the new component
+[coding-projects/my-app | cli]         2h ago   🏷 fix the auth redirect loop
+[side-projects/vacation-2026 | desktop] 1w ago     build a packing list
 ```
 
-Rows from the VS Code extension are tagged ` | vscode`; rows from the Claude Desktop app are tagged ` | desktop`; untagged rows are plain CLI sessions.
+Every session row carries a ` | <source>` tag and is color-coded: **cli → cyan**, **vscode → blue**, **desktop → magenta**. Colors render in the fzf picker and on any TTY (`sessions --list` from a terminal); when output is piped or redirected, color escape codes are suppressed automatically.
 
 - **Projects view (default)** — one row per unique cwd, complete history (no recency filter). Enter starts a **fresh** Claude Code session in that directory.
 - **Time view (Ctrl-T)** — flat list of individual sessions sorted by last-active time, most recent at the bottom. Enter resumes the chosen session.
